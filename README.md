@@ -1,96 +1,98 @@
-## 🛡️⚙️ Bazaar API - Tibia Scout Backend (Monorepo)
-Este é o motor central do ecossistema Tibia Scout. Um monorepo de alta performance responsável pelo web scraping, processamento de dados do Tibia Bazaar (CipSoft) e distribuição via API REST, agora otimizado para bancos de dados distribuídos.
+# Bazaar API (Docker)
 
-Este projeto é o backend obrigatório para:
-🔗 Tibia Scout Frontend: github.com/luizgustavolab/tibia-scout
+Data engine of the Tibia Scout ecosystem: scrapes the Tibia Bazaar (CipSoft), processes auction data with queues and workers, and serves it through a REST API. Containerised to run API, crawler and worker in a single Docker image on a free hosting plan.
 
-## 🏗️ Arquitetura do Projeto
+**Front end:** [tibia-scout](https://github.com/luizgustavocs/tibia-scout) · **Previous version (Railway):** [bazaar-api](https://github.com/luizgustavocs/bazaar-api)
 
-> - O projeto utiliza NPM Workspaces (Monorepo). Esta estrutura permite que todos os apps compartilhem uma camada lógica centralizada (lib), garantindo consistência de dados e tipagem:
+## Architecture
 
-apps/api: Servidor Fastify que entrega os dados processados.
-apps/crawler: Motor de scraping (Vite-like/TypeScript) que extrai dados do site oficial.
-apps/worker: Orquestrador BullMQ para persistência e limpeza de dados expirados.
-shared (internal): Lógica centralizada de conexão com Prisma/Turso e Redis.
+NPM Workspaces monorepo with three apps that share database and queue connections:
 
-## 🛠️ Stack Tecnológica
+| App | Responsibility |
+|---|---|
+| `apps/api` | Fastify server that exposes the processed data |
+| `apps/crawler` | Scraping engine that extracts auction data from the official website |
+| `apps/worker` | BullMQ worker that persists data in batches (upsert) and removes expired records |
 
-    Runtime: Node.js (v20+) + TypeScript
-    Framework Web: Fastify v4/v5
-    ORM: Prisma v7 (Otimizado para Turso/libSQL)
-    Banco de Dados: Turso (SQLite Distribuído) para persistência resiliente.
-    Fila/Tasks: BullMQ + Redis (Suporte a Upstash e Local)
-    Agendamento: Node-cron
+```
+crawler ──► Redis / BullMQ queue ──► worker ──► Turso (libSQL) ◄── api ◄── tibia-scout
+```
 
-## 🚀 Novas Implementações e Melhorias
+## Tech stack
 
-Recentemente atualizado para maior escalabilidade:
-  *Arquitetura Centralizada:* Agora as instâncias do Prisma e do Redis residem em uma lib compartilhada dentro de apps/api, evitando múltiplas conexões desnecessárias.
-  *Migração para Turso:* Saída do SQLite local puro para o Turso (libSQL), permitindo que os dados persistam de forma independente do ciclo de vida do container.
-  *Tipagem Estrita:* Implementação de Casting Seguro para as conexões do BullMQ, resolvendo conflitos de versão entre ioredis e as definições de tipo do worker.
-  *Eficiência de Memória:* Configuração rigorosa de removeOnComplete e attempts no BullMQ para operar dentro dos limites do Upstash Free Tier e do Render Free.
+| Concern | Technology |
+|---|---|
+| Runtime | Node.js 20+, TypeScript |
+| Web framework | Fastify |
+| ORM and database | Prisma 7, Turso (distributed SQLite / libSQL) |
+| Queues | BullMQ, Redis (local in the container or Upstash) |
+| Scheduling | node-cron |
+| Scraping | Axios, Cheerio |
+| Deployment | Docker, Render |
 
-## 🚀 Guia de Execução Local
-📋 Pré-requisitos
-Node.js v20+
-Instância Redis (Local ou Upstash)
-Token/URL do Turso (ou SQLite local para dev)
+## Engineering highlights
 
-**🔧 Instalação**
-  Clone e Instale:
-    git clone https://github.com/luizgustavolab/bazaar-api-docker.git
-    cd bazaar-api-docker
-    npm install
+- **Single-container deployment:** an `entrypoint.sh` runs Redis, API, crawler and worker in one container, fitting the 512 MB RAM limit of the free plan.
+- **Batching:** whole pages (25 characters at a time) are processed per job, reducing Redis commands by about 25 times and keeping usage within the Upstash free tier.
+- **Resilient persistence:** data lives in Turso, independent of container restarts; upserts keyed by unique IDs keep it consistent.
+- **Memory control:** `removeOnComplete` and retry attempts tuned in BullMQ; apps compiled to plain JavaScript (`dist/`) before deployment.
+- **Scheduled refresh:** heavy scraping runs at midnight (Brasília time), with an external health-check ping to avoid hibernation.
 
-  Configuração do Banco (Prisma v7):
-    npx prisma generate
-    npx prisma db push
-   
-  Variáveis de Ambiente (.env):
-    Crie um `.env` na raiz:
-    PORT=3333
-    DATABASE_URL="libsql://seu-projeto.turso.io"
-    DATABASE_AUTH_TOKEN="seu-token-aqui"
-    REDIS_HOST=127.0.0.1
-    REDIS_PORT=6379
-  
-  Execução em Desenvolvimento:
-    npm run dev
+## API endpoints
 
-## 📡 Endpoints Principais
-  GET /health: Check de saúde da aplicação e integridade do Turso/Redis.
-  GET /characters: Lista de personagens processados com filtros.
-  GET /bazaar: Dados brutos do scraping e status do leilão.
+| Method | Path | Description |
+|---|---|---|
+| GET | `/health` | Application, Turso and Redis health |
+| GET | `/characters` | Processed characters with filters |
+| GET | `/bazaar` | Auction data and status |
 
+## Getting started
 
-## 📦 Conteinerização & Deploy (Foco no Render)
-Diferente de arquiteturas tradicionais que exigem múltiplos serviços pagos separadamente, esta aplicação foi desenhada para rodar em um único container no plano gratuito do Render:
+Requirements: Node.js 20+, a Redis instance (local or Upstash) and a Turso database (or local SQLite for development).
 
-⚙️ Estratégia de Container Único
-Para contornar as limitações de memória (512MB RAM), o projeto utiliza um entrypoint.sh que gerencia:
-  Redis Interno: Instalado e executado dentro do próprio container para gerenciar as filas do BullMQ sem custos extras.
-  Execução Nativa: Todos os apps são compilados para JavaScript puro (dist/) antes do deploy, reduzindo drasticamente o uso de CPU e RAM.
-  Persistence: Otimizado para SQLite (local) ou Turso (cloud), garantindo que os dados sobrevivam aos restarts do container.
+```bash
+git clone https://github.com/luizgustavocs/bazaar-api-docker.git
+cd bazaar-api-docker
+npm install
+npx prisma generate
+npx prisma db push
+npm run dev
+```
 
-**🚀 Configuração para Deploy no Render**
-  Runtime: Docker
-  Plano: Free
-  Variáveis de Ambiente:
-  REDIS_PORT
-  REDIS_HOST
-  REDIS_PASSWORD
-  TURSO_AUTH_TOKEN
-  TURSO_DATABASE_URL
+Environment variables (see `.env.example`):
 
-## 🔄 Padrão de Commits
+| Variable | Description |
+|---|---|
+| `PORT` | API port (default 3333) |
+| `DATABASE_URL` / `TURSO_DATABASE_URL` | Turso (libSQL) database URL |
+| `DATABASE_AUTH_TOKEN` / `TURSO_AUTH_TOKEN` | Turso auth token |
+| `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD` | Redis connection |
 
-- Utilizamos Conventional Commits para manter a governança:
-  feat: Nova funcionalidade.
-  fix: Correção de erro.
-  docs: Alteração em documentação.
-  chore: Atualização de pacotes ou build
+## Deployment (Render)
 
-## 👨‍💻 Autor e Licença
+Runtime: Docker · Plan: Free · Set the Redis and Turso variables above in the service settings.
 
-Desenvolvido por Luiz Gustavo 🔗 **[https://github.com/luizgustavolab](https://github.com/luizgustavolab)** .
-Código aberto integrante do ecossistema Tibia Scout. Contribuições são bem-vindas respeitando os padrões de commits estabelecidos.
+## Commit convention
+
+Conventional Commits (`feat`, `fix`, `docs`, `chore`).
+
+## Author and license
+
+Luiz Gustavo Costa e Silva · [GitHub](https://github.com/luizgustavocs) · [LinkedIn](https://www.linkedin.com/in/luizgustavocs) · MIT License
+
+<details>
+<summary>Versão em português</summary>
+
+### Bazaar API (Docker)
+
+Motor de dados do ecossistema Tibia Scout: faz o scraping do Bazaar do Tibia, processa os leilões com filas e workers e distribui os dados por uma API REST.
+
+**Destaques técnicos**
+- Monorepo com NPM Workspaces: `api` (Fastify), `crawler` (scraping) e `worker` (BullMQ).
+- Prisma 7 com Turso (libSQL), Redis/BullMQ (local ou Upstash) e node-cron.
+- Container único no plano gratuito do Render, com Redis interno e apps compilados para JavaScript, dentro do limite de 512 MB de RAM.
+- Processamento em lote (25 personagens por vez), reduzindo em cerca de 25 vezes os comandos no Redis.
+- Upsert por ID único, garantindo integridade mesmo com reinicializações do container.
+
+**Como executar:** `npm install`, `npx prisma generate`, `npx prisma db push`, configurar o `.env` (Turso e Redis) e rodar `npm run dev`.
+</details>
