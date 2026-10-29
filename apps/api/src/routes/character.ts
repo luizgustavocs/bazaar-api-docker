@@ -30,9 +30,15 @@ export async function characterRoutes(fastify: FastifyInstance) {
     const itemsPerPage = parseInt(limit || "20");
     const skip = (currentPage - 1) * itemsPerPage;
 
+    // endsAt é um timestamp Unix em texto (sempre 10 dígitos), então a
+    // comparação lexicográfica equivale à numérica. Nunca lista leilão expirado,
+    // mesmo que o sync esteja atrasado.
+    const nowInSeconds = Math.floor(Date.now() / 1000).toString();
+
     const where: Prisma.CharacterWhereInput = {
       level: { gt: 0 },
       vocation: { not: "" },
+      auction: { is: { endsAt: { gt: nowInSeconds } } },
     };
 
     if (name) {
